@@ -1,3 +1,12 @@
+plabeler <- function(df){
+  # take a data frame of two columns: species and patch_color
+  # return new df with columns species, col1-coln as presence absence of color.
+  res <- cbind(df[1], mtabulate(as.data.frame(t(df[-1]))))
+  row.names(res) <- NULL
+  return(res)
+}
+
+
 clean_data <- function(patchdd) {
   patchdd %>% select(starts_with("species") | ends_with("colors")) -> pcolors
   
@@ -169,6 +178,7 @@ writeBayesTree <- function(tree) {
 
 compareRates <- function(cdfs, tree, silent = TRUE, allowRestrictions = TRUE, patch1 = "NONE", patch2 = "NONE"){  
   dir <- getwd()
+  results <- list(ind_res = 0, dep_res = 0, total_unconverged_parameters = 0, unconverged_parameters_after_restrictions = 0)
   
   if(patch1 != "NONE") {
     dir.create(paste0(dir, "/", patch1, "+", patch2))
@@ -180,7 +190,6 @@ compareRates <- function(cdfs, tree, silent = TRUE, allowRestrictions = TRUE, pa
   
   ## mtd = matched trait data
   tt <- tree
-  cdfs <- cdfs[1:5]
   
   #creates empty vectors to store results later on
   num_dyads <- length(cdfs)
@@ -199,11 +208,17 @@ compareRates <- function(cdfs, tree, silent = TRUE, allowRestrictions = TRUE, pa
   cat("#!/bin/bash")
   cat("\n")
   sink()
-  
+   
   #create tree and other input files
   writeBayesTree(tt)
   
   for(i in seq_along(cdfs)) {
+    if(i %% 23 == 0 ) {
+      sink("main_inputs.sh", append = TRUE)
+      cat("wait")
+      cat("\n")
+      sink()
+    }
     createInput(cdfs[[i]], i)
   }
   
@@ -228,26 +243,20 @@ compareRates <- function(cdfs, tree, silent = TRUE, allowRestrictions = TRUE, pa
   
   save(bf_res, file = paste0(path, "bf_res.RData"))
   
-  #delete output files
-  
-  for(i in seq_along(cdfs)) {
-    deleteOutput(i)
-  }
-  
   #call bayestrait again to output second chain
   #bf_res is used for data analysis, bf_res2 checks for convergenc
   
-  system("chmod +x main_inputs.sh")
-  system("./main_inputs.sh", ignore.stdout = silent)
+  #system("chmod +x main_inputs.sh")
+  #system("./main_inputs.sh", ignore.stdout = silent)
   
   #parse the Bayestrait output
   
-  bf_res2 <- lapply(seq_along(cdfs), 
-                   function(i) {
-                     parseOutput(i)
-                   })
+  # bf_res2 <- lapply(seq_along(cdfs), 
+  #                  function(i) {
+  #                    parseOutput(i)
+  #                  })
   
-  save(bf_res2, file = paste0(path, "bf_res2.RData"))
+  # save(bf_res2, file = paste0(path, "bf_res2.RData"))
 
   unlink("main_inputs.sh")
   
@@ -267,10 +276,10 @@ compareRates <- function(cdfs, tree, silent = TRUE, allowRestrictions = TRUE, pa
     
     #check effective size of bf_res
     dep_chain1 <- mcmc(bf_res[[i]]$dep_res$Log$results[c(-1, -3)][1:9])
-    dep_chain2 <- mcmc(bf_res2[[i]]$dep_res$Log$results[c(-1, -3)][1:9])
+    # dep_chain2 <- mcmc(bf_res2[[i]]$dep_res$Log$results[c(-1, -3)][1:9])
     
     ind_chain1 <- mcmc(bf_res[[i]]$ind_res$Log$results[c(-1, -3)][1:5])
-    ind_chain2 <- mcmc(bf_res2[[i]]$ind_res$Log$results[c(-1, -3)][1:5])
+    # ind_chain2 <- mcmc(bf_res2[[i]]$ind_res$Log$results[c(-1, -3)][1:5])
       
     ind_sizes <- effectiveSize(ind_chain1)
     dep_sizes <- effectiveSize(dep_chain1)
@@ -282,11 +291,13 @@ compareRates <- function(cdfs, tree, silent = TRUE, allowRestrictions = TRUE, pa
         cat("\n")
         sink()
         low_ind_size <- TRUE
+        results$total_unconverged_parameters <- results$total_unconverged_parameters + 1
       }
     }
     
     if(low_ind_size) {
       restrict_ind <- c(restrict_ind, i)
+      results$ind_res <- results$ind_res + 1 
     }
     
     for(k in seq_len(length(dep_sizes))) {
@@ -296,42 +307,45 @@ compareRates <- function(cdfs, tree, silent = TRUE, allowRestrictions = TRUE, pa
         cat("\n")
         sink()
         low_dep_size <- TRUE
+        results$total_unconverged_parameters <- results$total_unconverged_parameters + 1
       }
     }
     
     if(low_dep_size) {
       restrict_dep <- c(restrict_dep, i)
+      results$dep_res <- results$dep_res + 1 
     }
     
     #check gelman diagnostic for ind and dep chains
-    combined_ind_chains <- mcmc.list(ind_chain1, ind_chain2)
-    combined_dep_chains <- mcmc.list(dep_chain1, dep_chain2)
-    
-    ind_gelman_results <- gelman.diag(combined_ind_chains)$psrf[, 1]
-    dep_gelman_results <- gelman.diag(combined_dep_chains)$psrf[, 1]
-    
-    for(j in 1:length(ind_gelman_results)) {
-      if(ind_gelman_results[j] > 1.1) {
-        sink(paste0(path, "warnings.log"), append = TRUE)
-        cat(paste("Possible nonconvergence in in parameter", names(ind_gelman_results[j]), "of independent run", i, "due to a high potential scale reduction factor of", round(ind_gelman_results[j], digits = 2)))
-        cat("\n")
-        sink()
-      }
-    }
-    
-    for(k in 1:length(dep_gelman_results)) {
-      if(dep_gelman_results[k] > 1.1) {
-        sink(paste0(path, "warnings.log"), append = TRUE)
-        cat(paste("Possible nonconvergence in parameter", names(dep_gelman_results[k]), "of dependent run", i, "due to a high potential scale reduction factor of", round(dep_gelman_results[k], digits = 2)))
-        cat("\n")
-        sink()
-      }
-    }
+    # combined_ind_chains <- mcmc.list(ind_chain1, ind_chain2)
+    # combined_dep_chains <- mcmc.list(dep_chain1, dep_chain2)
+    # 
+    # ind_gelman_results <- gelman.diag(combined_ind_chains)$psrf[, 1]
+    # dep_gelman_results <- gelman.diag(combined_dep_chains)$psrf[, 1]
+    # 
+    # for(j in 1:length(ind_gelman_results)) {
+    #   if(ind_gelman_results[j] > 1.1) {
+    #     sink(paste0(path, "warnings.log"), append = TRUE)
+    #     cat(paste("Possible nonconvergence in in parameter", names(ind_gelman_results[j]), "of independent run", i, "due to a high potential scale reduction factor of", round(ind_gelman_results[j], digits = 2)))
+    #     cat("\n")
+    #     sink()
+    #   }
+    # }
+    # 
+    # for(k in 1:length(dep_gelman_results)) {
+    #   if(dep_gelman_results[k] > 1.1) {
+    #     sink(paste0(path, "warnings.log"), append = TRUE)
+    #     cat(paste("Possible nonconvergence in parameter", names(dep_gelman_results[k]), "of dependent run", i, "due to a high potential scale reduction factor of", round(dep_gelman_results[k], digits = 2)))
+    #     cat("\n")
+    #     sink()
+    #   }
+    #}
   }
   
   
   #run Bayestraits with parameter restrictions for low effective sample size runs
   if(length(restrict_dep) != 0 || length(restrict_ind) != 0) {
+    restrictions <- 0
     file.create("restrict_inputs.sh")
     sink("restrict_inputs.sh", append = TRUE)
     cat("#!/bin/bash")
@@ -340,18 +354,34 @@ compareRates <- function(cdfs, tree, silent = TRUE, allowRestrictions = TRUE, pa
     
     file.create(paste0(path, "restrictions.txt"))
     for(index in restrict_dep) {
+      restrictions = restrictions + 1
       sink(paste0(path, "restrictions.txt"), append = TRUE)
       cat(paste0("Dependent restriction for run ", index, " performed"))
       cat("\n")
       sink()
+      
+      if(restrictions %% 40 == 0) {
+        sink("restrict_inputs.sh", append = TRUE)
+        cat("wait")
+        cat("\n")
+        sink()
+      }
       create_dep_restriction(index)
     }
     
     for(index in restrict_ind) {
+      restrictions = restrictions + 1
       sink(paste0(path, "restrictions.txt"), append = TRUE)
       cat(paste0("Independent restriction for run ", index, " performed"))
       cat("\n")
       sink()
+      
+      if(restrictions %% 40 == 0) {
+        sink("restrict_inputs.sh", append = TRUE)
+        cat("wait")
+        cat("\n")
+        sink()
+      }
       create_ind_restriction(index)
     }
     
@@ -373,6 +403,41 @@ compareRates <- function(cdfs, tree, silent = TRUE, allowRestrictions = TRUE, pa
     save(bf_res_restricted, file = paste0(path, "bf_res_restricted.RData"))
     bf_res <- bf_res_restricted
     unlink("restrict_inputs.sh")
+    
+    #delete output files
+    
+    for(i in seq_along(cdfs)) {
+      deleteOutput(i)
+    }
+    
+    for(i in 1:length(bf_res)) {
+      #check effective size of bf_res after restrictions
+      dep_chain <- mcmc(bf_res[[i]]$dep_res$Log$results[c(-1, -3)][1:9])
+      ind_chain <- mcmc(bf_res[[i]]$ind_res$Log$results[c(-1, -3)][1:5])
+      
+      ind_sizes <- effectiveSize(ind_chain)
+      dep_sizes <- effectiveSize(dep_chain)
+      
+      for(j in seq_len(length(ind_sizes))) {
+        if(ind_sizes[j] < 200) {
+          sink(paste0(path, "warnings.log"), append = TRUE)
+          cat(paste("After parameter restriction, effective size for parameter", names(ind_sizes)[j], "of independent run", i, "is less than 200 at", round(ind_sizes[j], digits = 2)))
+          cat("\n")
+          sink()
+          results$unconverged_parameters_after_restrictions <- results$unconverged_parameters_after_restrictions + 1
+        }
+      }
+
+      for(k in seq_len(length(dep_sizes))) {
+        if(dep_sizes[k] < 200) {
+          sink(paste0(path, "warnings.log"), append = TRUE)
+          cat(paste("After parameter restriction, effective size for parameter" , names(dep_sizes)[k], "of dependent run", i, "is less than 200 at", round(dep_sizes[k], digits = 2)))
+          cat("\n")
+          sink()
+          results$unconverged_parameters_after_restrictions <- results$unconverged_parameters_after_restrictions + 1
+        }
+      }
+    }
   }
   
   
@@ -581,6 +646,8 @@ compareRates <- function(cdfs, tree, silent = TRUE, allowRestrictions = TRUE, pa
   model_results %>% mutate(bestmodel = str_replace_all(bestmodel, 'Model 1', 'indep')) %>%  mutate(bestmodel = str_replace_all(bestmodel, 'Model 2', "dep")) -> model_results
   model_results
   write.csv(model_results, file = paste0(path, "all_tanagers_color_bt_results.csv"), quote = F,)
+  
+  return(results)
 }
 
 
